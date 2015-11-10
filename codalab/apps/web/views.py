@@ -7,6 +7,8 @@ import os
 import sys
 import traceback
 import yaml
+import requests
+import logging
 
 from os.path import splitext
 
@@ -31,6 +33,8 @@ from django.views.generic import View, TemplateView, DetailView, ListView, FormV
 from django.views.generic.detail import SingleObjectMixin
 from django.views.generic.edit import FormMixin
 
+from django.shortcuts import redirect
+
 from mimetypes import MimeTypes
 
 from apps.web import forms
@@ -50,6 +54,7 @@ except ImportError:
         "See https://github.com/WindowsAzure/azure-sdk-for-python")
 
 
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
@@ -406,6 +411,7 @@ class CompetitionResultsPage(TemplateView):
             context['is_owner'] = is_owner
             context['phase'] = phase
             context['groups'] = phase.scores()
+            print "phase input_data name:", phase.input_data.name
             return context
         except:
             context['error'] = traceback.format_exc()
@@ -657,8 +663,10 @@ class MyCompetitionSubmissionOutput(LoginRequiredMixin, View):
     def get(self, request, *args, **kwargs):
         submission = models.CompetitionSubmission.objects.get(pk=kwargs.get('submission_id'))
         filetype = kwargs.get('filetype')
+        #print filetype
         try:
             file, file_type, file_name = submission.get_file_for_download(filetype, request.user)
+            #print file, filetype, filename
         except PermissionDenied:
             return HttpResponse(status=403)
         except ValueError:
@@ -681,6 +689,105 @@ class MyCompetitionSubmissionOutput(LoginRequiredMixin, View):
             msg = "There was an error retrieving file '%s'. Please try again later or report the issue."
             return HttpResponse(msg % filetype, status=200, content_type='text/plain')
 
+def medical_image_viewer(request, **kwargs):
+    print request.user
+    submission = models.CompetitionSubmission.objects.get(pk=kwargs.get('submission_id'))
+    print type(submission.participant)
+    print submission.participant.user.email
+    print submission.description
+    print type(submission.participant.user.username)
+    #this call is supposed to authenticate a user in ePAD
+    #r = requests.post("http://epad-public.stanford.edu/epad/session", auth=('artem', 'artem'))
+
+    epad_user = submission.participant.user.username + '_medici'
+    epad_ground_truth_user = 'ground_truth_medici'
+    epad_password = 'testtest'
+    epad_project = str(submission.participant).split('-')[0].replace(' ', '_').lower()[:-1]
+    #epad_project = epad_project[:-1]#remove trailing underscore
+    print "epad project:", epad_project  
+
+    def epad_user_exist(response, name):
+        for it in response.json()['ResultSet']['Result']:
+            if it['username'] == name:
+                return True
+        return False
+
+    ru = requests.get("http://epad-public.stanford.edu:8080/epad/v2/users/", auth=('artem', 'artem'))
+    if not epad_user_exist(ru, epad_user):
+        #create epad user
+        requests.post("http://epad-public.stanford.edu:8080/epad/v2/users/"+epad_user, params={'firstname' : submission.participant.user.username, 'lastname' : '', "email" : submission.participant.user.email, "password" : epad_password, "addPermission" : "CreateProject"}, auth=('artem', 'artem'))
+        logger.info("created epad user: %s", epad_user)
+    else:
+        logger.info("epad user %s already exists", epad_user)
+
+    ru = requests.get("http://epad-public.stanford.edu:8080/epad/v2/users/", auth=('artem', 'artem'))
+    if not epad_user_exist(ru, epad_ground_truth_user):
+        #create ground truth epad user
+        ru = requests.post("http://epad-public.stanford.edu:8080/epad/v2/users/"+epad_ground_truth_user, params={'firstname' : 'groundtruth', 'lastname' : '', "email" : '', "password" : epad_password, "addPermission" : "CreateProject"}, auth=('artem', 'artem'))
+        print "creating ground truth user status:", ru.reason 
+        logger.info("created ground truth user: %s", epad_ground_truth_user)
+    else:
+        logger.info("ground truth user %s already exists", epad_ground_truth_user)
+
+    def epad_project_exist(response, name):
+        for it in response.json()['ResultSet']['Result']:
+            if it['id'] == name:
+                return True
+        return False
+
+    rp = requests.get("http://epad-public.stanford.edu:8080/epad/v2/projects/", auth=(epad_user, epad_password))
+    if not epad_project_exist(rp, epad_project):
+        #create a new epad project
+        requests.post("http://epad-public.stanford.edu:8080/epad/v2/projects/"+epad_project, params={'projectName' : epad_project, 'projectDescription' : 'medici project'}, auth=(epad_user, epad_password))
+        #add user to the project
+        #note only project owner can add another user to the project
+        requests.put("http://epad-public.stanford.edu:8080/epad/v2/projects/"+epad_project+"/users/"+epad_user, params={'role' : 'Owner'}, auth=(epad_user, epad_password))
+        rp = requests.put("http://epad-public.stanford.edu:8080/epad/v2/projects/"+epad_project+"/users/"+epad_ground_truth_user, params={'role' : 'Collaborator'}, auth=(epad_user, epad_password))
+        #print "add ground truth user to project status:", rp.reason, rp.status_code
+        print "created project:", epad_project
+    else:
+        print "project", epad_project, "already exists"
+
+    #print submission.file, submission.file_url_base
+    #print submission.file
+    #print submission.file.name
+    #print submission.inputfile
+    #print submission.inputfile.name
+
+    #myfile, file_type, file_name = submission.get_file_for_download('detailed_results.html', request.user)
+    #print submission.file
+    #print submission.file.name
+    #print myfile
+    #print file_type
+    #print file_name
+    #print submission.phase.reference_data.name
+    #resp = HttpResponse(myfile, mimetype = "application/x-zip-compressed")
+    zip_file = zipfile.ZipFile(submission.file)
+    #response = HttpResponse(submission.file.read(), status=200, content_type='zip')
+    name = zip_file.namelist()[0]
+    print "submission file name: ", name
+    #rf = requests.post("http://epad-public.stanford.edu/epad/v2/projects/medici/files/", files={name: zip_file.read(name)}, auth=('artem', 'artem'))    
+
+    #upload submission file
+    rf = requests.post("http://epad-public.stanford.edu:8080/epad/v2/projects/"+epad_project+"/files/", files={name: zip_file.read(name)}, auth=(epad_user, epad_password))
+    print "submission file uplod status: ", rf.status_code, rf.reason
+
+    #upload ground truth file    
+    zip_file = zipfile.ZipFile(submission.phase.reference_data)
+    name = zip_file.namelist()[0]
+    print "ground truth file name:", name
+    rf = requests.post("http://epad-public.stanford.edu:8080/epad/v2/projects/"+epad_project+"/files/", files={name : zip_file.read(name)}, auth=(epad_ground_truth_user, epad_password))
+    print "ground truth file upload status: ", rf.status_code, rf.reason
+
+    return render(request, 'web/my/epadpublic.html', {'user' : epad_user, 'pass' : epad_password})
+    #response = HttpResponse(zip_file.read(name), status=200, content_type='Application/DICOM')
+    #response['Content-Disposition'] = 'attachment; filename=%s' % name
+    #return response
+    #return HttpResponse("OK")
+    #return redirect("http://epad-public.stanford.edu:8080/epad/")
+
+
+
 class MyCompetitionSubmissionDetailedResults(TemplateView):
     """
     This view serves the files associated with a submission.
@@ -690,6 +797,7 @@ class MyCompetitionSubmissionDetailedResults(TemplateView):
     def get(self, request, *args, **kwargs):
         submission = models.CompetitionSubmission.objects.get(pk=kwargs.get('submission_id'))
         context_dict = {'id': kwargs.get('submission_id'), 'user': submission.participant.user, 'filename':submission.detailed_results_file.name}
+        #print submission.detailed_results_file.name
         return render_to_response('web/my/detailed_results.html', context_dict, RequestContext(request))
 
 class MyCompetitionSubmissionsPage(LoginRequiredMixin, TemplateView):
