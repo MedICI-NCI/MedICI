@@ -1,0 +1,29 @@
+compute-worker:
+    azure-storage:
+        account-name: "portalvhdshvgybb1ww05pq"
+        account-key: "jlq9USDcGXbjsTfRz2QzkMDeqL0tplXSy2QxIqI7H9yacHWuHjKw8EB8qqUOylfpKS/PS/avMkFRUoS7GD3A4g=="
+    azure-service-bus:
+        namespace: "codalabsb"
+        key: "AmlMvA1U4H+OsrEWi9hJa/Z6dafT4LRBwueakOcIniM="
+        issuer: "owner"
+        listen-to: "compute"
+    local-root: "/tmp"
+    logging:
+        version: 1
+        formatters:
+            simple:
+                format: '%(asctime)s %(levelname)s %(message)s'
+        handlers:
+            console:
+                class: logging.StreamHandler
+                level: DEBUG
+                formatter: simple
+                stream: ext://sys.stdout
+        loggers:
+            codalabtools:
+                level: DEBUG
+                handlers: [console]
+                propagate: no
+        root:
+          level: DEBUG
+          handlers: [console]
