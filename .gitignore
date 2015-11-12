@@ -4,7 +4,7 @@ codalab/config/generated
 codalab/static/**/**
 codalab/media/**/**
 codalab/clip
-**/**/.codalabconfig
+#**/**/.codalabconfig
 codalab/scores.txt
 codalab/codalab/scores.txt
 
